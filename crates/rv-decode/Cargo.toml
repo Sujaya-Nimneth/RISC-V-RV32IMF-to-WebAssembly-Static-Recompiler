@@ -1,0 +1,11 @@
+[package]
+name = "rv-decode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+object = { workspace = true }
+rv-abi = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
