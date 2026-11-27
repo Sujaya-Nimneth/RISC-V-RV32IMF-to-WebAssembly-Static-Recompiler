@@ -1,4 +1,14 @@
-use crate::inst::{Instruction, Reg};
+use crate::inst::{FReg, Instruction, Reg};
+
+#[inline]
+fn encode_r4(opcode: u32, rd: FReg, funct3: u32, rs1: FReg, rs2: FReg, rs3: FReg) -> u32 {
+    ((rs3.0 as u32 & 0x1F) << 27)
+        | ((rs2.0 as u32 & 0x1F) << 20)
+        | ((rs1.0 as u32 & 0x1F) << 15)
+        | ((funct3 & 0x7) << 12)
+        | ((rd.0 as u32 & 0x1F) << 7)
+        | opcode
+}
 
 #[inline]
 fn encode_r(opcode: u32, rd: Reg, funct3: u32, rs1: Reg, rs2: Reg, funct7: u32) -> u32 {
@@ -121,6 +131,40 @@ pub fn encode_instruction(inst: &Instruction) -> u32 {
         Instruction::Divu { rd, rs1, rs2 } => encode_r(0x33, rd, 5, rs1, rs2, 0x01),
         Instruction::Rem { rd, rs1, rs2 } => encode_r(0x33, rd, 6, rs1, rs2, 0x01),
         Instruction::Remu { rd, rs1, rs2 } => encode_r(0x33, rd, 7, rs1, rs2, 0x01),
+
+        Instruction::Flw { rd, rs1, imm } => encode_i(0x07, Reg(rd.0), 2, rs1, imm),
+        Instruction::Fsw { rs1, rs2, imm } => encode_s(0x27, 2, rs1, Reg(rs2.0), imm),
+        Instruction::FmaddS { rd, rs1, rs2, rs3, rm } => encode_r4(0x43, rd, rm as u32, rs1, rs2, rs3),
+        Instruction::FmsubS { rd, rs1, rs2, rs3, rm } => encode_r4(0x47, rd, rm as u32, rs1, rs2, rs3),
+        Instruction::FnmsubS { rd, rs1, rs2, rs3, rm } => encode_r4(0x4B, rd, rm as u32, rs1, rs2, rs3),
+        Instruction::FnmaddS { rd, rs1, rs2, rs3, rm } => encode_r4(0x4F, rd, rm as u32, rs1, rs2, rs3),
+        Instruction::FaddS { rd, rs1, rs2, rm } => encode_r(0x53, Reg(rd.0), rm as u32, Reg(rs1.0), Reg(rs2.0), 0x00),
+        Instruction::FsubS { rd, rs1, rs2, rm } => encode_r(0x53, Reg(rd.0), rm as u32, Reg(rs1.0), Reg(rs2.0), 0x04),
+        Instruction::FmulS { rd, rs1, rs2, rm } => encode_r(0x53, Reg(rd.0), rm as u32, Reg(rs1.0), Reg(rs2.0), 0x08),
+        Instruction::FdivS { rd, rs1, rs2, rm } => encode_r(0x53, Reg(rd.0), rm as u32, Reg(rs1.0), Reg(rs2.0), 0x0C),
+        Instruction::FsqrtS { rd, rs1, rm } => encode_r(0x53, Reg(rd.0), rm as u32, Reg(rs1.0), Reg(0), 0x2C),
+        Instruction::FsgnjS { rd, rs1, rs2 } => encode_r(0x53, Reg(rd.0), 0, Reg(rs1.0), Reg(rs2.0), 0x10),
+        Instruction::FsgnjnS { rd, rs1, rs2 } => encode_r(0x53, Reg(rd.0), 1, Reg(rs1.0), Reg(rs2.0), 0x10),
+        Instruction::FsgnjxS { rd, rs1, rs2 } => encode_r(0x53, Reg(rd.0), 2, Reg(rs1.0), Reg(rs2.0), 0x10),
+        Instruction::FminS { rd, rs1, rs2 } => encode_r(0x53, Reg(rd.0), 0, Reg(rs1.0), Reg(rs2.0), 0x14),
+        Instruction::FmaxS { rd, rs1, rs2 } => encode_r(0x53, Reg(rd.0), 1, Reg(rs1.0), Reg(rs2.0), 0x14),
+        Instruction::FcvtWS { rd, rs1, rm } => encode_r(0x53, rd, rm as u32, Reg(rs1.0), Reg(0), 0x60),
+        Instruction::FcvtWuS { rd, rs1, rm } => encode_r(0x53, rd, rm as u32, Reg(rs1.0), Reg(1), 0x60),
+        Instruction::FmvXW { rd, rs1 } => encode_r(0x53, rd, 0, Reg(rs1.0), Reg(0), 0x70),
+        Instruction::FclassS { rd, rs1 } => encode_r(0x53, rd, 1, Reg(rs1.0), Reg(0), 0x70),
+        Instruction::FeqS { rd, rs1, rs2 } => encode_r(0x53, rd, 2, Reg(rs1.0), Reg(rs2.0), 0x50),
+        Instruction::FltS { rd, rs1, rs2 } => encode_r(0x53, rd, 1, Reg(rs1.0), Reg(rs2.0), 0x50),
+        Instruction::FleS { rd, rs1, rs2 } => encode_r(0x53, rd, 0, Reg(rs1.0), Reg(rs2.0), 0x50),
+        Instruction::FcvtSW { rd, rs1, rm } => encode_r(0x53, Reg(rd.0), rm as u32, rs1, Reg(0), 0x68),
+        Instruction::FcvtSWu { rd, rs1, rm } => encode_r(0x53, Reg(rd.0), rm as u32, rs1, Reg(1), 0x68),
+        Instruction::FmvWX { rd, rs1 } => encode_r(0x53, Reg(rd.0), 0, rs1, Reg(0), 0x78),
+
+        Instruction::Csrrw { rd, rs1, csr } => encode_i(0x73, rd, 1, rs1, csr as i32),
+        Instruction::Csrrs { rd, rs1, csr } => encode_i(0x73, rd, 2, rs1, csr as i32),
+        Instruction::Csrrc { rd, rs1, csr } => encode_i(0x73, rd, 3, rs1, csr as i32),
+        Instruction::Csrrwi { rd, zimm, csr } => encode_i(0x73, rd, 5, Reg(zimm & 0x1F), csr as i32),
+        Instruction::Csrrsi { rd, zimm, csr } => encode_i(0x73, rd, 6, Reg(zimm & 0x1F), csr as i32),
+        Instruction::Csrrci { rd, zimm, csr } => encode_i(0x73, rd, 7, Reg(zimm & 0x1F), csr as i32),
 
         Instruction::Fence => 0x0000_000F,
         Instruction::Ecall => 0x0000_0073,

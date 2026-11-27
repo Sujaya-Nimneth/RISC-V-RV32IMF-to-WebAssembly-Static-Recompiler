@@ -128,6 +128,42 @@ pub enum Instruction {
     Rem { rd: Reg, rs1: Reg, rs2: Reg },
     Remu { rd: Reg, rs1: Reg, rs2: Reg },
 
+    // RV32F
+    Flw { rd: FReg, rs1: Reg, imm: i32 },
+    Fsw { rs1: Reg, rs2: FReg, imm: i32 },
+    FmaddS { rd: FReg, rs1: FReg, rs2: FReg, rs3: FReg, rm: u8 },
+    FmsubS { rd: FReg, rs1: FReg, rs2: FReg, rs3: FReg, rm: u8 },
+    FnmsubS { rd: FReg, rs1: FReg, rs2: FReg, rs3: FReg, rm: u8 },
+    FnmaddS { rd: FReg, rs1: FReg, rs2: FReg, rs3: FReg, rm: u8 },
+    FaddS { rd: FReg, rs1: FReg, rs2: FReg, rm: u8 },
+    FsubS { rd: FReg, rs1: FReg, rs2: FReg, rm: u8 },
+    FmulS { rd: FReg, rs1: FReg, rs2: FReg, rm: u8 },
+    FdivS { rd: FReg, rs1: FReg, rs2: FReg, rm: u8 },
+    FsqrtS { rd: FReg, rs1: FReg, rm: u8 },
+    FsgnjS { rd: FReg, rs1: FReg, rs2: FReg },
+    FsgnjnS { rd: FReg, rs1: FReg, rs2: FReg },
+    FsgnjxS { rd: FReg, rs1: FReg, rs2: FReg },
+    FminS { rd: FReg, rs1: FReg, rs2: FReg },
+    FmaxS { rd: FReg, rs1: FReg, rs2: FReg },
+    FcvtWS { rd: Reg, rs1: FReg, rm: u8 },
+    FcvtWuS { rd: Reg, rs1: FReg, rm: u8 },
+    FmvXW { rd: Reg, rs1: FReg },
+    FeqS { rd: Reg, rs1: FReg, rs2: FReg },
+    FltS { rd: Reg, rs1: FReg, rs2: FReg },
+    FleS { rd: Reg, rs1: FReg, rs2: FReg },
+    FclassS { rd: Reg, rs1: FReg },
+    FcvtSW { rd: FReg, rs1: Reg, rm: u8 },
+    FcvtSWu { rd: FReg, rs1: Reg, rm: u8 },
+    FmvWX { rd: FReg, rs1: Reg },
+
+    // Zicsr (FP CSRs: 0x001 fflags, 0x002 frm, 0x003 fcsr)
+    Csrrw { rd: Reg, rs1: Reg, csr: u16 },
+    Csrrs { rd: Reg, rs1: Reg, csr: u16 },
+    Csrrc { rd: Reg, rs1: Reg, csr: u16 },
+    Csrrwi { rd: Reg, zimm: u8, csr: u16 },
+    Csrrsi { rd: Reg, zimm: u8, csr: u16 },
+    Csrrci { rd: Reg, zimm: u8, csr: u16 },
+
     Fence,
     Ecall,
     Ebreak,
@@ -277,11 +313,100 @@ pub fn decode_instruction(pc: u32, word: u32) -> Result<Instruction, DecodeError
             _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
         },
         0x0F if funct3 == 0 || funct3 == 1 => Ok(Instruction::Fence),
-        0x73 => match word {
-            0x0000_0073 => Ok(Instruction::Ecall),
-            0x0010_0073 => Ok(Instruction::Ebreak),
-            _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
-        },
+        // RV32F loads/stores/FMA/OP-FP
+        0x07 if funct3 == 2 => Ok(Instruction::Flw {
+            rd: FReg(rd.0),
+            rs1,
+            imm: imm_i(word),
+        }),
+        0x27 if funct3 == 2 => Ok(Instruction::Fsw {
+            rs1,
+            rs2: FReg(rs2.0),
+            imm: imm_s(word),
+        }),
+        0x43 | 0x47 | 0x4B | 0x4F => {
+            let fmt = (word >> 25) & 0x3;
+            if fmt != 0 {
+                return Err(DecodeError::UnsupportedInstruction { pc, word });
+            }
+            let frd = FReg(rd.0);
+            let frs1 = FReg(rs1.0);
+            let frs2 = FReg(rs2.0);
+            let frs3 = FReg(((word >> 27) & 0x1F) as u8);
+            let rm = funct3 as u8;
+            match opcode {
+                0x43 => Ok(Instruction::FmaddS { rd: frd, rs1: frs1, rs2: frs2, rs3: frs3, rm }),
+                0x47 => Ok(Instruction::FmsubS { rd: frd, rs1: frs1, rs2: frs2, rs3: frs3, rm }),
+                0x4B => Ok(Instruction::FnmsubS { rd: frd, rs1: frs1, rs2: frs2, rs3: frs3, rm }),
+                _ => Ok(Instruction::FnmaddS { rd: frd, rs1: frs1, rs2: frs2, rs3: frs3, rm }),
+            }
+        }
+        0x53 => {
+            let frd = FReg(rd.0);
+            let frs1 = FReg(rs1.0);
+            let frs2 = FReg(rs2.0);
+            let rm = funct3 as u8;
+            match funct7 {
+                0x00 => Ok(Instruction::FaddS { rd: frd, rs1: frs1, rs2: frs2, rm }),
+                0x04 => Ok(Instruction::FsubS { rd: frd, rs1: frs1, rs2: frs2, rm }),
+                0x08 => Ok(Instruction::FmulS { rd: frd, rs1: frs1, rs2: frs2, rm }),
+                0x0C => Ok(Instruction::FdivS { rd: frd, rs1: frs1, rs2: frs2, rm }),
+                0x2C if rs2.0 == 0 => Ok(Instruction::FsqrtS { rd: frd, rs1: frs1, rm }),
+                0x10 => match funct3 {
+                    0 => Ok(Instruction::FsgnjS { rd: frd, rs1: frs1, rs2: frs2 }),
+                    1 => Ok(Instruction::FsgnjnS { rd: frd, rs1: frs1, rs2: frs2 }),
+                    2 => Ok(Instruction::FsgnjxS { rd: frd, rs1: frs1, rs2: frs2 }),
+                    _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
+                },
+                0x14 => match funct3 {
+                    0 => Ok(Instruction::FminS { rd: frd, rs1: frs1, rs2: frs2 }),
+                    1 => Ok(Instruction::FmaxS { rd: frd, rs1: frs1, rs2: frs2 }),
+                    _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
+                },
+                0x60 => match rs2.0 {
+                    0 => Ok(Instruction::FcvtWS { rd, rs1: frs1, rm }),
+                    1 => Ok(Instruction::FcvtWuS { rd, rs1: frs1, rm }),
+                    _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
+                },
+                0x70 if rs2.0 == 0 => match funct3 {
+                    0 => Ok(Instruction::FmvXW { rd, rs1: frs1 }),
+                    1 => Ok(Instruction::FclassS { rd, rs1: frs1 }),
+                    _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
+                },
+                0x50 => match funct3 {
+                    0 => Ok(Instruction::FleS { rd, rs1: frs1, rs2: frs2 }),
+                    1 => Ok(Instruction::FltS { rd, rs1: frs1, rs2: frs2 }),
+                    2 => Ok(Instruction::FeqS { rd, rs1: frs1, rs2: frs2 }),
+                    _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
+                },
+                0x68 => match rs2.0 {
+                    0 => Ok(Instruction::FcvtSW { rd: frd, rs1, rm }),
+                    1 => Ok(Instruction::FcvtSWu { rd: frd, rs1, rm }),
+                    _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
+                },
+                0x78 if rs2.0 == 0 && funct3 == 0 => Ok(Instruction::FmvWX { rd: frd, rs1 }),
+                _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
+            }
+        }
+        0x73 => {
+            if word == 0x0000_0073 {
+                Ok(Instruction::Ecall)
+            } else if word == 0x0010_0073 {
+                Ok(Instruction::Ebreak)
+            } else {
+                let csr = ((word >> 20) & 0xFFF) as u16;
+                let zimm = rs1.0;
+                match funct3 {
+                    1 => Ok(Instruction::Csrrw { rd, rs1, csr }),
+                    2 => Ok(Instruction::Csrrs { rd, rs1, csr }),
+                    3 => Ok(Instruction::Csrrc { rd, rs1, csr }),
+                    5 => Ok(Instruction::Csrrwi { rd, zimm, csr }),
+                    6 => Ok(Instruction::Csrrsi { rd, zimm, csr }),
+                    7 => Ok(Instruction::Csrrci { rd, zimm, csr }),
+                    _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
+                }
+            }
+        }
         _ => Err(DecodeError::UnsupportedInstruction { pc, word }),
     }
 }

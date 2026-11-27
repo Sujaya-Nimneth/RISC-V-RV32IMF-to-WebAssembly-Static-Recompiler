@@ -1,8 +1,8 @@
 use crate::ir::{
-    BinOp, BlockId, CmpOp, IrBlock, IrFunction, IrInst, IrModule, IrOp, IrTerm, IrType, MemWidth,
-    OptConfig, ValueId,
+    BinOp, BlockId, CmpOp, CsrKind, FBinOp, FCmpOp, FMulAddOp, FUnaryOp, IrBlock, IrFunction,
+    IrInst, IrModule, IrOp, IrTerm, IrType, MemWidth, OptConfig, ValueId,
 };
-use rv_decode::{BlockTerm, FunctionCfg, Instruction, ProgramCfg, Reg};
+use rv_decode::{BlockTerm, FReg, FunctionCfg, Instruction, ProgramCfg, Reg};
 use std::collections::BTreeMap;
 
 /// Lift a `ProgramCfg` into an `IrModule` under the given `OptConfig`.
@@ -156,6 +156,134 @@ fn lift_function(fcfg: &FunctionCfg, opt: &OptConfig) -> IrFunction {
                 Instruction::Divu { rd, rs1, rs2 } => lift_alu_rr(&mut func, &mut insts, pc, rd, rs1, rs2, BinOp::DivU),
                 Instruction::Rem { rd, rs1, rs2 } => lift_alu_rr(&mut func, &mut insts, pc, rd, rs1, rs2, BinOp::RemS),
                 Instruction::Remu { rd, rs1, rs2 } => lift_alu_rr(&mut func, &mut insts, pc, rd, rs1, rs2, BinOp::RemU),
+
+                // RV32F
+                Instruction::Flw { rd, rs1, imm } => {
+                    let base = emit_read_reg(&mut func, &mut insts, pc, rs1);
+                    let addr = if imm != 0 {
+                        let off = emit_const_i32(&mut func, &mut insts, pc, imm);
+                        emit_binop(&mut func, &mut insts, pc, BinOp::Add, base, off)
+                    } else {
+                        base
+                    };
+                    let dst = func.new_value();
+                    insts.push(IrInst {
+                        dst: Some(dst),
+                        ty: Some(IrType::F32),
+                        guest_pc: Some(pc),
+                        op: IrOp::LoadF32 { addr, offset: 0 },
+                    });
+                    emit_write_freg(&mut insts, pc, rd, dst);
+                }
+                Instruction::Fsw { rs1, rs2, imm } => {
+                    let base = emit_read_reg(&mut func, &mut insts, pc, rs1);
+                    let val = emit_read_freg(&mut func, &mut insts, pc, rs2);
+                    let addr = if imm != 0 {
+                        let off = emit_const_i32(&mut func, &mut insts, pc, imm);
+                        emit_binop(&mut func, &mut insts, pc, BinOp::Add, base, off)
+                    } else {
+                        base
+                    };
+                    insts.push(IrInst {
+                        dst: None,
+                        ty: None,
+                        guest_pc: Some(pc),
+                        op: IrOp::StoreF32 { addr, val, offset: 0 },
+                    });
+                }
+                Instruction::FmaddS { rd, rs1, rs2, rs3, .. } => lift_fma(&mut func, &mut insts, pc, rd, rs1, rs2, rs3, FMulAddOp::Fmadd),
+                Instruction::FmsubS { rd, rs1, rs2, rs3, .. } => lift_fma(&mut func, &mut insts, pc, rd, rs1, rs2, rs3, FMulAddOp::Fmsub),
+                Instruction::FnmsubS { rd, rs1, rs2, rs3, .. } => lift_fma(&mut func, &mut insts, pc, rd, rs1, rs2, rs3, FMulAddOp::Fnmsub),
+                Instruction::FnmaddS { rd, rs1, rs2, rs3, .. } => lift_fma(&mut func, &mut insts, pc, rd, rs1, rs2, rs3, FMulAddOp::Fnmadd),
+                Instruction::FaddS { rd, rs1, rs2, .. } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fadd),
+                Instruction::FsubS { rd, rs1, rs2, .. } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fsub),
+                Instruction::FmulS { rd, rs1, rs2, .. } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fmul),
+                Instruction::FdivS { rd, rs1, rs2, .. } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fdiv),
+                Instruction::FminS { rd, rs1, rs2 } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fmin),
+                Instruction::FmaxS { rd, rs1, rs2 } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fmax),
+                Instruction::FsgnjS { rd, rs1, rs2 } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fsgnj),
+                Instruction::FsgnjnS { rd, rs1, rs2 } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fsgnjn),
+                Instruction::FsgnjxS { rd, rs1, rs2 } => lift_fbin(&mut func, &mut insts, pc, rd, rs1, rs2, FBinOp::Fsgnjx),
+                Instruction::FsqrtS { rd, rs1, .. } => {
+                    let s = emit_read_freg(&mut func, &mut insts, pc, rs1);
+                    let dst = emit_funary(&mut func, &mut insts, pc, FUnaryOp::Fsqrt, IrType::F32, s);
+                    emit_write_freg(&mut insts, pc, rd, dst);
+                }
+                Instruction::FcvtWS { rd, rs1, .. } => {
+                    let s = emit_read_freg(&mut func, &mut insts, pc, rs1);
+                    let dst = emit_funary(&mut func, &mut insts, pc, FUnaryOp::FcvtWS, IrType::I32, s);
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::FcvtWuS { rd, rs1, .. } => {
+                    let s = emit_read_freg(&mut func, &mut insts, pc, rs1);
+                    let dst = emit_funary(&mut func, &mut insts, pc, FUnaryOp::FcvtWuS, IrType::I32, s);
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::FmvXW { rd, rs1 } => {
+                    let s = emit_read_freg(&mut func, &mut insts, pc, rs1);
+                    let dst = emit_funary(&mut func, &mut insts, pc, FUnaryOp::FmvXW, IrType::I32, s);
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::FclassS { rd, rs1 } => {
+                    let s = emit_read_freg(&mut func, &mut insts, pc, rs1);
+                    let dst = emit_funary(&mut func, &mut insts, pc, FUnaryOp::Fclass, IrType::I32, s);
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::FcvtSW { rd, rs1, .. } => {
+                    let s = emit_read_reg(&mut func, &mut insts, pc, rs1);
+                    let dst = emit_funary(&mut func, &mut insts, pc, FUnaryOp::FcvtSW, IrType::F32, s);
+                    emit_write_freg(&mut insts, pc, rd, dst);
+                }
+                Instruction::FcvtSWu { rd, rs1, .. } => {
+                    let s = emit_read_reg(&mut func, &mut insts, pc, rs1);
+                    let dst = emit_funary(&mut func, &mut insts, pc, FUnaryOp::FcvtSWu, IrType::F32, s);
+                    emit_write_freg(&mut insts, pc, rd, dst);
+                }
+                Instruction::FmvWX { rd, rs1 } => {
+                    let s = emit_read_reg(&mut func, &mut insts, pc, rs1);
+                    let dst = emit_funary(&mut func, &mut insts, pc, FUnaryOp::FmvWX, IrType::F32, s);
+                    emit_write_freg(&mut insts, pc, rd, dst);
+                }
+                Instruction::FeqS { rd, rs1, rs2 } => lift_fcmp(&mut func, &mut insts, pc, rd, rs1, rs2, FCmpOp::Feq),
+                Instruction::FltS { rd, rs1, rs2 } => lift_fcmp(&mut func, &mut insts, pc, rd, rs1, rs2, FCmpOp::Flt),
+                Instruction::FleS { rd, rs1, rs2 } => lift_fcmp(&mut func, &mut insts, pc, rd, rs1, rs2, FCmpOp::Fle),
+
+                Instruction::Csrrw { rd, rs1, csr } => {
+                    let v = emit_read_reg(&mut func, &mut insts, pc, rs1);
+                    let dst = func.new_value();
+                    insts.push(IrInst { dst: Some(dst), ty: Some(IrType::I32), guest_pc: Some(pc), op: IrOp::CsrOp { kind: CsrKind::Csrrw, csr, val: v, write: true } });
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::Csrrs { rd, rs1, csr } => {
+                    let v = emit_read_reg(&mut func, &mut insts, pc, rs1);
+                    let dst = func.new_value();
+                    insts.push(IrInst { dst: Some(dst), ty: Some(IrType::I32), guest_pc: Some(pc), op: IrOp::CsrOp { kind: CsrKind::Csrrs, csr, val: v, write: rs1 != Reg::ZERO } });
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::Csrrc { rd, rs1, csr } => {
+                    let v = emit_read_reg(&mut func, &mut insts, pc, rs1);
+                    let dst = func.new_value();
+                    insts.push(IrInst { dst: Some(dst), ty: Some(IrType::I32), guest_pc: Some(pc), op: IrOp::CsrOp { kind: CsrKind::Csrrc, csr, val: v, write: rs1 != Reg::ZERO } });
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::Csrrwi { rd, zimm, csr } => {
+                    let v = emit_const_i32(&mut func, &mut insts, pc, zimm as i32);
+                    let dst = func.new_value();
+                    insts.push(IrInst { dst: Some(dst), ty: Some(IrType::I32), guest_pc: Some(pc), op: IrOp::CsrOp { kind: CsrKind::Csrrw, csr, val: v, write: true } });
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::Csrrsi { rd, zimm, csr } => {
+                    let v = emit_const_i32(&mut func, &mut insts, pc, zimm as i32);
+                    let dst = func.new_value();
+                    insts.push(IrInst { dst: Some(dst), ty: Some(IrType::I32), guest_pc: Some(pc), op: IrOp::CsrOp { kind: CsrKind::Csrrs, csr, val: v, write: zimm != 0 } });
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
+                Instruction::Csrrci { rd, zimm, csr } => {
+                    let v = emit_const_i32(&mut func, &mut insts, pc, zimm as i32);
+                    let dst = func.new_value();
+                    insts.push(IrInst { dst: Some(dst), ty: Some(IrType::I32), guest_pc: Some(pc), op: IrOp::CsrOp { kind: CsrKind::Csrrc, csr, val: v, write: zimm != 0 } });
+                    emit_write_reg(&mut insts, pc, rd, dst);
+                }
 
                 Instruction::Fence => {}
                 Instruction::Ecall => {
@@ -423,4 +551,107 @@ fn lift_branch(
         then_bb,
         else_bb,
     }
+}
+
+fn emit_read_freg(func: &mut IrFunction, insts: &mut Vec<IrInst>, pc: u32, freg: FReg) -> ValueId {
+    let dst = func.new_value();
+    insts.push(IrInst {
+        dst: Some(dst),
+        ty: Some(IrType::F32),
+        guest_pc: Some(pc),
+        op: IrOp::ReadFReg(freg),
+    });
+    dst
+}
+
+fn emit_write_freg(insts: &mut Vec<IrInst>, pc: u32, freg: FReg, val: ValueId) {
+    insts.push(IrInst {
+        dst: None,
+        ty: None,
+        guest_pc: Some(pc),
+        op: IrOp::WriteFReg { freg, val },
+    });
+}
+
+fn lift_fbin(
+    func: &mut IrFunction,
+    insts: &mut Vec<IrInst>,
+    pc: u32,
+    rd: FReg,
+    rs1: FReg,
+    rs2: FReg,
+    op: FBinOp,
+) {
+    let lhs = emit_read_freg(func, insts, pc, rs1);
+    let rhs = emit_read_freg(func, insts, pc, rs2);
+    let dst = func.new_value();
+    insts.push(IrInst {
+        dst: Some(dst),
+        ty: Some(IrType::F32),
+        guest_pc: Some(pc),
+        op: IrOp::FBinOp { op, lhs, rhs },
+    });
+    emit_write_freg(insts, pc, rd, dst);
+}
+
+fn lift_fma(
+    func: &mut IrFunction,
+    insts: &mut Vec<IrInst>,
+    pc: u32,
+    rd: FReg,
+    rs1: FReg,
+    rs2: FReg,
+    rs3: FReg,
+    op: FMulAddOp,
+) {
+    let a = emit_read_freg(func, insts, pc, rs1);
+    let b = emit_read_freg(func, insts, pc, rs2);
+    let c = emit_read_freg(func, insts, pc, rs3);
+    let dst = func.new_value();
+    insts.push(IrInst {
+        dst: Some(dst),
+        ty: Some(IrType::F32),
+        guest_pc: Some(pc),
+        op: IrOp::FMulAdd { op, a, b, c },
+    });
+    emit_write_freg(insts, pc, rd, dst);
+}
+
+fn emit_funary(
+    func: &mut IrFunction,
+    insts: &mut Vec<IrInst>,
+    pc: u32,
+    op: FUnaryOp,
+    ty: IrType,
+    src: ValueId,
+) -> ValueId {
+    let dst = func.new_value();
+    insts.push(IrInst {
+        dst: Some(dst),
+        ty: Some(ty),
+        guest_pc: Some(pc),
+        op: IrOp::FUnaryOp { op, src },
+    });
+    dst
+}
+
+fn lift_fcmp(
+    func: &mut IrFunction,
+    insts: &mut Vec<IrInst>,
+    pc: u32,
+    rd: Reg,
+    rs1: FReg,
+    rs2: FReg,
+    op: FCmpOp,
+) {
+    let lhs = emit_read_freg(func, insts, pc, rs1);
+    let rhs = emit_read_freg(func, insts, pc, rs2);
+    let dst = func.new_value();
+    insts.push(IrInst {
+        dst: Some(dst),
+        ty: Some(IrType::I32),
+        guest_pc: Some(pc),
+        op: IrOp::FCmp { op, lhs, rhs },
+    });
+    emit_write_reg(insts, pc, rd, dst);
 }

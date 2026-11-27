@@ -97,6 +97,53 @@ pub enum BinOp {
     ShrS,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FBinOp {
+    Fadd,
+    Fsub,
+    Fmul,
+    Fdiv,
+    Fmin,
+    Fmax,
+    Fsgnj,
+    Fsgnjn,
+    Fsgnjx,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FUnaryOp {
+    Fsqrt,
+    FcvtWS,
+    FcvtWuS,
+    FcvtSW,
+    FcvtSWu,
+    FmvXW,
+    FmvWX,
+    Fclass,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FCmpOp {
+    Feq,
+    Flt,
+    Fle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FMulAddOp {
+    Fmadd,
+    Fmsub,
+    Fnmsub,
+    Fnmadd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CsrKind {
+    Csrrw,
+    Csrrs,
+    Csrrc,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IrOp {
     ConstI32(i32),
@@ -110,6 +157,13 @@ pub enum IrOp {
     Cmp { op: CmpOp, lhs: ValueId, rhs: ValueId },
     Load { addr: ValueId, offset: i32, width: MemWidth, signed: bool },
     Store { addr: ValueId, val: ValueId, offset: i32, width: MemWidth },
+    FBinOp { op: FBinOp, lhs: ValueId, rhs: ValueId },
+    FUnaryOp { op: FUnaryOp, src: ValueId },
+    FMulAdd { op: FMulAddOp, a: ValueId, b: ValueId, c: ValueId },
+    FCmp { op: FCmpOp, lhs: ValueId, rhs: ValueId },
+    LoadF32 { addr: ValueId, offset: i32 },
+    StoreF32 { addr: ValueId, val: ValueId, offset: i32 },
+    CsrOp { kind: CsrKind, csr: u16, val: ValueId, write: bool },
     Ecall,
     AddInstret(u32),
 }
@@ -121,6 +175,8 @@ impl IrOp {
             IrOp::WriteReg { .. }
                 | IrOp::WriteFReg { .. }
                 | IrOp::Store { .. }
+                | IrOp::StoreF32 { .. }
+                | IrOp::CsrOp { .. }
                 | IrOp::Ecall
                 | IrOp::AddInstret(_)
         )
@@ -134,12 +190,20 @@ impl IrOp {
             | IrOp::ReadFReg(_)
             | IrOp::Ecall
             | IrOp::AddInstret(_) => Vec::new(),
-            IrOp::Copy(v) | IrOp::WriteReg { val: v, .. } | IrOp::WriteFReg { val: v, .. } => {
+            IrOp::Copy(v)
+            | IrOp::WriteReg { val: v, .. }
+            | IrOp::WriteFReg { val: v, .. }
+            | IrOp::FUnaryOp { src: v, .. }
+            | IrOp::CsrOp { val: v, .. } => {
                 vec![v]
             }
-            IrOp::BinOp { lhs, rhs, .. } | IrOp::Cmp { lhs, rhs, .. } => vec![lhs, rhs],
-            IrOp::Load { addr, .. } => vec![addr],
-            IrOp::Store { addr, val, .. } => vec![addr, val],
+            IrOp::BinOp { lhs, rhs, .. }
+            | IrOp::Cmp { lhs, rhs, .. }
+            | IrOp::FBinOp { lhs, rhs, .. }
+            | IrOp::FCmp { lhs, rhs, .. } => vec![lhs, rhs],
+            IrOp::FMulAdd { a, b, c, .. } => vec![a, b, c],
+            IrOp::Load { addr, .. } | IrOp::LoadF32 { addr, .. } => vec![addr],
+            IrOp::Store { addr, val, .. } | IrOp::StoreF32 { addr, val, .. } => vec![addr, val],
         }
     }
 }

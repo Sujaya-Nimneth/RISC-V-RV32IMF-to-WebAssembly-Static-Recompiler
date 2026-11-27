@@ -455,17 +455,29 @@ fn eliminate_trivial_phis(func: &mut IrFunction) {
 
 pub(crate) fn remap_op(op: &mut IrOp, resolve: &impl Fn(ValueId) -> ValueId) {
     match op {
-        IrOp::Copy(v) | IrOp::WriteReg { val: v, .. } | IrOp::WriteFReg { val: v, .. } => {
+        IrOp::Copy(v)
+        | IrOp::WriteReg { val: v, .. }
+        | IrOp::WriteFReg { val: v, .. }
+        | IrOp::FUnaryOp { src: v, .. }
+        | IrOp::CsrOp { val: v, .. } => {
             *v = resolve(*v);
         }
-        IrOp::BinOp { lhs, rhs, .. } | IrOp::Cmp { lhs, rhs, .. } => {
+        IrOp::BinOp { lhs, rhs, .. }
+        | IrOp::Cmp { lhs, rhs, .. }
+        | IrOp::FBinOp { lhs, rhs, .. }
+        | IrOp::FCmp { lhs, rhs, .. } => {
             *lhs = resolve(*lhs);
             *rhs = resolve(*rhs);
         }
-        IrOp::Load { addr, .. } => {
+        IrOp::FMulAdd { a, b, c, .. } => {
+            *a = resolve(*a);
+            *b = resolve(*b);
+            *c = resolve(*c);
+        }
+        IrOp::Load { addr, .. } | IrOp::LoadF32 { addr, .. } => {
             *addr = resolve(*addr);
         }
-        IrOp::Store { addr, val, .. } => {
+        IrOp::Store { addr, val, .. } | IrOp::StoreF32 { addr, val, .. } => {
             *addr = resolve(*addr);
             *val = resolve(*val);
         }
