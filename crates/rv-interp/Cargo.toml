@@ -1,0 +1,12 @@
+[package]
+name = "rv-interp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rv-abi = { workspace = true }
+rv-decode = { workspace = true }
+crc32fast = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

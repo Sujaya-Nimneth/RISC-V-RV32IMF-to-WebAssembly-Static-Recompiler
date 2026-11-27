@@ -1,0 +1,19 @@
+[package]
+name = "rv-web-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rv-abi = { workspace = true }
+rv-decode = { workspace = true }
+rv-ir = { workspace = true }
+rv-wasm = { workspace = true }
+rv-interp = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasmprinter = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
