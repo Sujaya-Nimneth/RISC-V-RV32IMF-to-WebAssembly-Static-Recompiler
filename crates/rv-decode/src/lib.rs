@@ -2,10 +2,12 @@
 
 pub mod asm;
 pub mod disasm;
+pub mod elf;
 pub mod inst;
 
 pub use asm::{build_test_elf, build_test_elf_at, encode_instruction};
 pub use disasm::disassemble;
+pub use elf::{ElfError, ElfSymbol, LoadSegment, LoadedElf};
 pub use inst::{DecodeError, FReg, Instruction, Reg, decode_instruction};
 
 #[cfg(test)]
@@ -98,5 +100,14 @@ mod tests {
     fn rejects_compressed_instructions() {
         let err = decode_instruction(0x10000, 0x0000_0001).unwrap_err();
         assert!(matches!(err, DecodeError::CompressedUnsupported { .. }));
+    }
+
+    #[test]
+    fn parses_hello_smoke_elf() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../guests/common/hello.elf");
+        let bytes = std::fs::read(path).expect("read hello.elf");
+        let elf = LoadedElf::parse(&bytes).expect("parse hello.elf");
+        assert_eq!(elf.entry, rv_abi::TEXT_BASE);
+        assert!(elf.symbol_name(elf.entry).is_some());
     }
 }
