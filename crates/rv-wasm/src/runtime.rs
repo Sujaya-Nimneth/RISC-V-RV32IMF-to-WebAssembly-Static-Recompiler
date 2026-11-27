@@ -22,6 +22,7 @@ pub struct ExecutionResult {
     pub instret: u64,
     pub exit_code: i32,
     pub memory_crc32: u32,
+    pub exec_ms: f64,
 }
 
 #[derive(Debug)]
@@ -171,16 +172,18 @@ pub fn execute_wasm<H: HostEnv + 'static>(wasm_bytes: &[u8], host: H) -> Result<
         .get_typed_func::<(), i32>(&mut store, "_start")
         .map_err(|e| RuntimeError::Wasmtime(e.to_string()))?;
 
+    let t_exec0 = std::time::Instant::now();
     let exit_code = match start.call(&mut store, ()) {
         Ok(code) => code,
         Err(err) => {
             if let Some(sig) = err.downcast_ref::<ExitSignal>() {
                 sig.0
             } else {
-                return Err(RuntimeError::Wasmtime(err.to_string()));
+                return Err(RuntimeError::Wasmtime(format!("{err:?}")));
             }
         }
     };
+    let exec_ms = t_exec0.elapsed().as_secs_f64() * 1000.0;
 
     let get_reg = instance
         .get_typed_func::<i32, i32>(&mut store, "get_reg")
@@ -228,6 +231,7 @@ pub fn execute_wasm<H: HostEnv + 'static>(wasm_bytes: &[u8], host: H) -> Result<
             instret,
             exit_code,
             memory_crc32,
+            exec_ms,
         },
         state.host,
     ))

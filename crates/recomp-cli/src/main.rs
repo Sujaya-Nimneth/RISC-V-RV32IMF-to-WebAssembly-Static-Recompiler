@@ -228,13 +228,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 interp.run(&mut i_host, 200_000_000)?;
                 let interp_ms = t_i0.elapsed().as_secs_f64() * 1000.0;
 
-                let t_w0 = Instant::now();
-                let (_, _) = execute_wasm(&wasm_o0.wasm_bytes, HeadlessHost::new())?;
-                let o0_ms = t_w0.elapsed().as_secs_f64() * 1000.0;
+                let (res_o0, _) = execute_wasm(&wasm_o0.wasm_bytes, HeadlessHost::new())?;
+                let o0_ms = res_o0.exec_ms;
 
-                let t_w2 = Instant::now();
                 let (res_o2, _) = execute_wasm(&wasm_o2.wasm_bytes, HeadlessHost::new())?;
-                let o2_ms = t_w2.elapsed().as_secs_f64() * 1000.0;
+                let o2_ms = res_o2.exec_ms;
 
                 let mips = (res_o2.instret as f64) / (o2_ms * 1000.0).max(1e-6);
                 let speedup = interp_ms / o2_ms.max(1e-6);
