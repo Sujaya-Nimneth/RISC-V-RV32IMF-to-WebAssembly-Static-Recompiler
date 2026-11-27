@@ -1,11 +1,13 @@
 //! RV32IMF instruction decoder, disassembler, ELF32 loader, and CFG discovery.
 
 pub mod asm;
+pub mod cfg;
 pub mod disasm;
 pub mod elf;
 pub mod inst;
 
 pub use asm::{build_test_elf, build_test_elf_at, encode_instruction};
+pub use cfg::{BasicBlock, BlockTerm, CfgError, DecodedInst, FunctionCfg, ProgramCfg, discover_cfg};
 pub use disasm::disassemble;
 pub use elf::{ElfError, ElfSymbol, LoadSegment, LoadedElf};
 pub use inst::{DecodeError, FReg, Instruction, Reg, decode_instruction};
