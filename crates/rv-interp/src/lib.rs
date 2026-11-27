@@ -4,7 +4,7 @@ use rv_abi::{
     FB_BASE, FB_MAX_SIZE, HEAP_LIMIT, HostEnv, LINEAR_MEM_BYTES, STACK_TOP, SYS_CLOCK_MS,
     SYS_EXIT, SYS_POLL_INPUT, SYS_PRESENT_FRAME, SYS_SBRK, SYS_WRITE, write_mmio_input,
 };
-use rv_decode::{DecodeError, Instruction, LoadedElf, Reg, decode_instruction};
+use rv_decode::{DecodeError, FReg, Instruction, LoadedElf, Reg, decode_instruction};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -89,6 +89,16 @@ impl Interpreter {
         if r.0 != 0 {
             self.cpu.x[r.index()] = val;
         }
+    }
+
+    #[inline]
+    pub fn freg(&self, r: FReg) -> f32 {
+        self.cpu.f[r.index()]
+    }
+
+    #[inline]
+    pub fn set_freg(&mut self, r: FReg, val: f32) {
+        self.cpu.f[r.index()] = val;
     }
 
     pub fn memory_crc32(&self) -> u32 {
@@ -382,6 +392,142 @@ impl Interpreter {
                 self.set_reg(rd, res);
             }
 
+            // RV32F
+            Instruction::Flw { rd, rs1, imm } => {
+                let addr = self.reg(rs1).wrapping_add(imm as u32);
+                let bits = self.read_u32(addr)?;
+                self.set_freg(rd, f32::from_bits(bits));
+            }
+            Instruction::Fsw { rs1, rs2, imm } => {
+                let addr = self.reg(rs1).wrapping_add(imm as u32);
+                self.write_u32(addr, self.freg(rs2).to_bits())?;
+            }
+            Instruction::FmaddS { rd, rs1, rs2, rs3, .. } => {
+                let res = self.freg(rs1).mul_add(self.freg(rs2), self.freg(rs3));
+                self.set_freg(rd, canon_f32(res));
+            }
+            Instruction::FmsubS { rd, rs1, rs2, rs3, .. } => {
+                let res = self.freg(rs1).mul_add(self.freg(rs2), -self.freg(rs3));
+                self.set_freg(rd, canon_f32(res));
+            }
+            Instruction::FnmsubS { rd, rs1, rs2, rs3, .. } => {
+                let res = (-self.freg(rs1)).mul_add(self.freg(rs2), self.freg(rs3));
+                self.set_freg(rd, canon_f32(res));
+            }
+            Instruction::FnmaddS { rd, rs1, rs2, rs3, .. } => {
+                let res = (-self.freg(rs1)).mul_add(self.freg(rs2), -self.freg(rs3));
+                self.set_freg(rd, canon_f32(res));
+            }
+            Instruction::FaddS { rd, rs1, rs2, .. } => {
+                self.set_freg(rd, canon_f32(self.freg(rs1) + self.freg(rs2)));
+            }
+            Instruction::FsubS { rd, rs1, rs2, .. } => {
+                self.set_freg(rd, canon_f32(self.freg(rs1) - self.freg(rs2)));
+            }
+            Instruction::FmulS { rd, rs1, rs2, .. } => {
+                self.set_freg(rd, canon_f32(self.freg(rs1) * self.freg(rs2)));
+            }
+            Instruction::FdivS { rd, rs1, rs2, .. } => {
+                self.set_freg(rd, canon_f32(self.freg(rs1) / self.freg(rs2)));
+            }
+            Instruction::FsqrtS { rd, rs1, .. } => {
+                self.set_freg(rd, canon_f32(self.freg(rs1).sqrt()));
+            }
+            Instruction::FsgnjS { rd, rs1, rs2 } => {
+                let a = self.freg(rs1).to_bits();
+                let b = self.freg(rs2).to_bits();
+                self.set_freg(rd, f32::from_bits((a & 0x7FFF_FFFF) | (b & 0x8000_0000)));
+            }
+            Instruction::FsgnjnS { rd, rs1, rs2 } => {
+                let a = self.freg(rs1).to_bits();
+                let b = self.freg(rs2).to_bits();
+                self.set_freg(rd, f32::from_bits((a & 0x7FFF_FFFF) | ((!b) & 0x8000_0000)));
+            }
+            Instruction::FsgnjxS { rd, rs1, rs2 } => {
+                let a = self.freg(rs1).to_bits();
+                let b = self.freg(rs2).to_bits();
+                self.set_freg(rd, f32::from_bits(a ^ (b & 0x8000_0000)));
+            }
+            Instruction::FminS { rd, rs1, rs2 } => {
+                self.set_freg(rd, rv_fmin(self.freg(rs1), self.freg(rs2)));
+            }
+            Instruction::FmaxS { rd, rs1, rs2 } => {
+                self.set_freg(rd, rv_fmax(self.freg(rs1), self.freg(rs2)));
+            }
+            Instruction::FcvtWS { rd, rs1, .. } => {
+                self.set_reg(rd, rv_fcvt_w_s(self.freg(rs1)) as u32);
+            }
+            Instruction::FcvtWuS { rd, rs1, .. } => {
+                self.set_reg(rd, rv_fcvt_wu_s(self.freg(rs1)));
+            }
+            Instruction::FmvXW { rd, rs1 } => {
+                self.set_reg(rd, self.freg(rs1).to_bits());
+            }
+            Instruction::FclassS { rd, rs1 } => {
+                self.set_reg(rd, rv_fclass_s(self.freg(rs1)));
+            }
+            Instruction::FeqS { rd, rs1, rs2 } => {
+                let v = if self.freg(rs1) == self.freg(rs2) { 1 } else { 0 };
+                self.set_reg(rd, v);
+            }
+            Instruction::FltS { rd, rs1, rs2 } => {
+                let v = if self.freg(rs1) < self.freg(rs2) { 1 } else { 0 };
+                self.set_reg(rd, v);
+            }
+            Instruction::FleS { rd, rs1, rs2 } => {
+                let v = if self.freg(rs1) <= self.freg(rs2) { 1 } else { 0 };
+                self.set_reg(rd, v);
+            }
+            Instruction::FcvtSW { rd, rs1, .. } => {
+                self.set_freg(rd, canon_f32((self.reg(rs1) as i32) as f32));
+            }
+            Instruction::FcvtSWu { rd, rs1, .. } => {
+                self.set_freg(rd, canon_f32(self.reg(rs1) as f32));
+            }
+            Instruction::FmvWX { rd, rs1 } => {
+                self.set_freg(rd, f32::from_bits(self.reg(rs1)));
+            }
+
+            Instruction::Csrrw { rd, rs1, csr } => {
+                let old = self.read_csr(csr);
+                let val = self.reg(rs1);
+                self.write_csr(csr, val);
+                self.set_reg(rd, old);
+            }
+            Instruction::Csrrs { rd, rs1, csr } => {
+                let old = self.read_csr(csr);
+                if rs1 != Reg::ZERO {
+                    self.write_csr(csr, old | self.reg(rs1));
+                }
+                self.set_reg(rd, old);
+            }
+            Instruction::Csrrc { rd, rs1, csr } => {
+                let old = self.read_csr(csr);
+                if rs1 != Reg::ZERO {
+                    self.write_csr(csr, old & !self.reg(rs1));
+                }
+                self.set_reg(rd, old);
+            }
+            Instruction::Csrrwi { rd, zimm, csr } => {
+                let old = self.read_csr(csr);
+                self.write_csr(csr, zimm as u32);
+                self.set_reg(rd, old);
+            }
+            Instruction::Csrrsi { rd, zimm, csr } => {
+                let old = self.read_csr(csr);
+                if zimm != 0 {
+                    self.write_csr(csr, old | (zimm as u32));
+                }
+                self.set_reg(rd, old);
+            }
+            Instruction::Csrrci { rd, zimm, csr } => {
+                let old = self.read_csr(csr);
+                if zimm != 0 {
+                    self.write_csr(csr, old & !(zimm as u32));
+                }
+                self.set_reg(rd, old);
+            }
+
             Instruction::Fence => {}
             Instruction::Ebreak => return Err(InterpError::Ebreak(pc)),
             Instruction::Ecall => {
@@ -480,5 +626,131 @@ impl Interpreter {
             steps += 1;
         }
         Ok(steps)
+    }
+
+    fn read_csr(&self, csr: u16) -> u32 {
+        match csr {
+            0x001 => self.cpu.fcsr & 0x1F,
+            0x002 => (self.cpu.fcsr >> 5) & 0x7,
+            0x003 => self.cpu.fcsr & 0xFF,
+            _ => 0,
+        }
+    }
+
+    fn write_csr(&mut self, csr: u16, val: u32) {
+        match csr {
+            0x001 => self.cpu.fcsr = (self.cpu.fcsr & !0x1F) | (val & 0x1F),
+            0x002 => self.cpu.fcsr = (self.cpu.fcsr & !(0x7 << 5)) | ((val & 0x7) << 5),
+            0x003 => self.cpu.fcsr = val & 0xFF,
+            _ => {}
+        }
+    }
+}
+
+#[inline]
+fn canon_f32(x: f32) -> f32 {
+    if x.is_nan() {
+        f32::from_bits(0x7FC0_0000)
+    } else {
+        x
+    }
+}
+
+#[inline]
+fn rv_fmin(a: f32, b: f32) -> f32 {
+    if a.is_nan() && b.is_nan() {
+        return f32::from_bits(0x7FC0_0000);
+    }
+    if a.is_nan() {
+        return b;
+    }
+    if b.is_nan() {
+        return a;
+    }
+    if a.to_bits() == 0x8000_0000 && b.to_bits() == 0x0000_0000 {
+        return a;
+    }
+    if b.to_bits() == 0x8000_0000 && a.to_bits() == 0x0000_0000 {
+        return b;
+    }
+    a.min(b)
+}
+
+#[inline]
+fn rv_fmax(a: f32, b: f32) -> f32 {
+    if a.is_nan() && b.is_nan() {
+        return f32::from_bits(0x7FC0_0000);
+    }
+    if a.is_nan() {
+        return b;
+    }
+    if b.is_nan() {
+        return a;
+    }
+    if a.to_bits() == 0x8000_0000 && b.to_bits() == 0x0000_0000 {
+        return b;
+    }
+    if b.to_bits() == 0x8000_0000 && a.to_bits() == 0x0000_0000 {
+        return a;
+    }
+    a.max(b)
+}
+
+#[inline]
+fn rv_fcvt_w_s(x: f32) -> i32 {
+    if x.is_nan() {
+        return i32::MAX;
+    }
+    let r = x.round_ties_even();
+    if r >= 2147483648.0 {
+        i32::MAX
+    } else if r < -2147483648.0 {
+        i32::MIN
+    } else {
+        r as i32
+    }
+}
+
+#[inline]
+fn rv_fcvt_wu_s(x: f32) -> u32 {
+    if x.is_nan() {
+        return u32::MAX;
+    }
+    let r = x.round_ties_even();
+    if r >= 4294967296.0 {
+        u32::MAX
+    } else if r < 0.0 {
+        0
+    } else {
+        r as u32
+    }
+}
+
+#[inline]
+fn rv_fclass_s(x: f32) -> u32 {
+    let bits = x.to_bits();
+    let sign = (bits >> 31) != 0;
+    let exp = (bits >> 23) & 0xFF;
+    let mant = bits & 0x7F_FFFF;
+    if exp == 0xFF {
+        if mant == 0 {
+            if sign { 1 << 0 } else { 1 << 7 }
+        } else if (mant & 0x40_0000) == 0 {
+            1 << 8 // signaling NaN
+        } else {
+            1 << 9 // quiet NaN
+        }
+    } else if exp == 0 {
+        if mant == 0 {
+            if sign { 1 << 3 } else { 1 << 4 }
+        } else if sign {
+            1 << 2
+        } else {
+            1 << 5
+        }
+    } else if sign {
+        1 << 1
+    } else {
+        1 << 6
     }
 }
