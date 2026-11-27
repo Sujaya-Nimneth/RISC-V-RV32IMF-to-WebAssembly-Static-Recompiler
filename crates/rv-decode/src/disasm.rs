@@ -147,6 +147,102 @@ pub fn disassemble(pc: u32, inst: &Instruction) -> String {
         Instruction::Remu { rd, rs1, rs2 } => {
             let _ = write!(out, "remu {rd}, {rs1}, {rs2}");
         }
+        Instruction::Flw { rd, rs1, imm } => {
+            let _ = write!(out, "flw {rd}, {imm}({rs1})");
+        }
+        Instruction::Fsw { rs1, rs2, imm } => {
+            let _ = write!(out, "fsw {rs2}, {imm}({rs1})");
+        }
+        Instruction::FmaddS { rd, rs1, rs2, rs3, .. } => {
+            let _ = write!(out, "fmadd.s {rd}, {rs1}, {rs2}, {rs3}");
+        }
+        Instruction::FmsubS { rd, rs1, rs2, rs3, .. } => {
+            let _ = write!(out, "fmsub.s {rd}, {rs1}, {rs2}, {rs3}");
+        }
+        Instruction::FnmsubS { rd, rs1, rs2, rs3, .. } => {
+            let _ = write!(out, "fnmsub.s {rd}, {rs1}, {rs2}, {rs3}");
+        }
+        Instruction::FnmaddS { rd, rs1, rs2, rs3, .. } => {
+            let _ = write!(out, "fnmadd.s {rd}, {rs1}, {rs2}, {rs3}");
+        }
+        Instruction::FaddS { rd, rs1, rs2, .. } => {
+            let _ = write!(out, "fadd.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FsubS { rd, rs1, rs2, .. } => {
+            let _ = write!(out, "fsub.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FmulS { rd, rs1, rs2, .. } => {
+            let _ = write!(out, "fmul.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FdivS { rd, rs1, rs2, .. } => {
+            let _ = write!(out, "fdiv.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FsqrtS { rd, rs1, .. } => {
+            let _ = write!(out, "fsqrt.s {rd}, {rs1}");
+        }
+        Instruction::FsgnjS { rd, rs1, rs2 } => {
+            let _ = write!(out, "fsgnj.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FsgnjnS { rd, rs1, rs2 } => {
+            let _ = write!(out, "fsgnjn.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FsgnjxS { rd, rs1, rs2 } => {
+            let _ = write!(out, "fsgnjx.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FminS { rd, rs1, rs2 } => {
+            let _ = write!(out, "fmin.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FmaxS { rd, rs1, rs2 } => {
+            let _ = write!(out, "fmax.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FcvtWS { rd, rs1, .. } => {
+            let _ = write!(out, "fcvt.w.s {rd}, {rs1}");
+        }
+        Instruction::FcvtWuS { rd, rs1, .. } => {
+            let _ = write!(out, "fcvt.wu.s {rd}, {rs1}");
+        }
+        Instruction::FmvXW { rd, rs1 } => {
+            let _ = write!(out, "fmv.x.w {rd}, {rs1}");
+        }
+        Instruction::FeqS { rd, rs1, rs2 } => {
+            let _ = write!(out, "feq.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FltS { rd, rs1, rs2 } => {
+            let _ = write!(out, "flt.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FleS { rd, rs1, rs2 } => {
+            let _ = write!(out, "fle.s {rd}, {rs1}, {rs2}");
+        }
+        Instruction::FclassS { rd, rs1 } => {
+            let _ = write!(out, "fclass.s {rd}, {rs1}");
+        }
+        Instruction::FcvtSW { rd, rs1, .. } => {
+            let _ = write!(out, "fcvt.s.w {rd}, {rs1}");
+        }
+        Instruction::FcvtSWu { rd, rs1, .. } => {
+            let _ = write!(out, "fcvt.s.wu {rd}, {rs1}");
+        }
+        Instruction::FmvWX { rd, rs1 } => {
+            let _ = write!(out, "fmv.w.x {rd}, {rs1}");
+        }
+        Instruction::Csrrw { rd, rs1, csr } => {
+            let _ = write!(out, "csrrw {rd}, 0x{csr:03x}, {rs1}");
+        }
+        Instruction::Csrrs { rd, rs1, csr } => {
+            let _ = write!(out, "csrrs {rd}, 0x{csr:03x}, {rs1}");
+        }
+        Instruction::Csrrc { rd, rs1, csr } => {
+            let _ = write!(out, "csrrc {rd}, 0x{csr:03x}, {rs1}");
+        }
+        Instruction::Csrrwi { rd, zimm, csr } => {
+            let _ = write!(out, "csrrwi {rd}, 0x{csr:03x}, {zimm}");
+        }
+        Instruction::Csrrsi { rd, zimm, csr } => {
+            let _ = write!(out, "csrrsi {rd}, 0x{csr:03x}, {zimm}");
+        }
+        Instruction::Csrrci { rd, zimm, csr } => {
+            let _ = write!(out, "csrrci {rd}, 0x{csr:03x}, {zimm}");
+        }
         Instruction::Fence => out.push_str("fence"),
         Instruction::Ecall => out.push_str("ecall"),
         Instruction::Ebreak => out.push_str("ebreak"),
