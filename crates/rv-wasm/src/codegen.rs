@@ -84,6 +84,15 @@ const FN_GUEST_BASE: u32 = 8;
 
 /// Compile an `IrModule` and `LoadedElf` into a validated standalone WebAssembly module.
 pub fn compile_to_wasm(module: &IrModule, elf: &LoadedElf) -> Result<CompiledWasm, CodegenError> {
+    compile_to_wasm_with_opts(module, elf, true)
+}
+
+/// Compile an `IrModule` and `LoadedElf` with configurable local coalescing.
+pub fn compile_to_wasm_with_opts(
+    module: &IrModule,
+    elf: &LoadedElf,
+    local_coalescing: bool,
+) -> Result<CompiledWasm, CodegenError> {
     let mut func_index_map: BTreeMap<u32, u32> = BTreeMap::new();
     let guest_pcs: Vec<u32> = module.functions.keys().copied().collect();
     for (idx, &pc) in guest_pcs.iter().enumerate() {
@@ -257,7 +266,7 @@ pub fn compile_to_wasm(module: &IrModule, elf: &LoadedElf) -> Result<CompiledWas
 
     for &pc in &guest_pcs {
         let ir_fn = &module.functions[&pc];
-        code.function(&emit_guest_function(ir_fn, &func_index_map));
+        code.function(&emit_guest_function(ir_fn, &func_index_map, local_coalescing));
     }
 
     code.function(&emit_start_fn(entry_wasm_fn));
@@ -543,7 +552,11 @@ impl<'a> EmitCtx<'a> {
     }
 }
 
-fn emit_guest_function(ir_fn: &IrFunction, func_index_map: &BTreeMap<u32, u32>) -> Function {
+fn emit_guest_function(
+    ir_fn: &IrFunction,
+    func_index_map: &BTreeMap<u32, u32>,
+    local_coalescing: bool,
+) -> Function {
     // Determine ValueId types (default I32).
     let mut val_types = vec![ValType::I32; ir_fn.next_value as usize];
     for bb in &ir_fn.blocks {
@@ -566,32 +579,8 @@ fn emit_guest_function(ir_fn: &IrFunction, func_index_map: &BTreeMap<u32, u32>) 
     let structured = recover_structured_cfg(ir_fn);
     let is_dispatcher = matches!(structured, StructuredCfg::Dispatcher { .. });
 
-    // Allocate locals (index 0 is param `$expected_ra`).
-    let mut locals_decl: Vec<ValType> = Vec::new();
-    let mut val_locals = Vec::with_capacity(val_types.len());
-    for ty in val_types {
-        val_locals.push(1 + locals_decl.len() as u32);
-        locals_decl.push(ty);
-    }
-    let bb_id_local = if is_dispatcher {
-        let idx = 1 + locals_decl.len() as u32;
-        locals_decl.push(ValType::I32);
-        Some(idx)
-    } else {
-        None
-    };
-
-    // Compress local declarations into `(count, ValType)` runs.
-    let mut runs: Vec<(u32, ValType)> = Vec::new();
-    for ty in locals_decl {
-        if let Some(last) = runs.last_mut() {
-            if last.1 == ty {
-                last.0 += 1;
-                continue;
-            }
-        }
-        runs.push((1, ty));
-    }
+    let (val_locals, bb_id_local, runs) =
+        crate::local_alloc::allocate_locals(ir_fn, &val_types, is_dispatcher, local_coalescing);
 
     let mut f = Function::new(runs);
     let mut ctx = EmitCtx {
@@ -930,14 +919,22 @@ fn emit_branch_to(
     target_bb: BlockId,
     fallthrough: Option<BlockId>,
 ) {
-    // Emit phi copies for target_bb if any.
+    // Emit parallel phi copies for target_bb (push all sources before setting any dst).
     let target_phis = &ctx.ir_fn.blocks[target_bb.0 as usize].phis;
     if !target_phis.is_empty() {
+        let mut copies = Vec::with_capacity(target_phis.len());
         for phi in target_phis {
             if let Some(&(_, src_val)) = phi.incoming.iter().find(|&&(pred, _)| pred == from_bb) {
-                f.instruction(&WInst::LocalGet(ctx.val_local(src_val)));
-                f.instruction(&WInst::LocalSet(ctx.val_local(phi.dst)));
+                if src_val != phi.dst {
+                    copies.push((phi.dst, src_val));
+                }
             }
+        }
+        for &(_, src_val) in &copies {
+            f.instruction(&WInst::LocalGet(ctx.val_local(src_val)));
+        }
+        for &(dst_val, _) in copies.iter().rev() {
+            f.instruction(&WInst::LocalSet(ctx.val_local(dst_val)));
         }
     }
 

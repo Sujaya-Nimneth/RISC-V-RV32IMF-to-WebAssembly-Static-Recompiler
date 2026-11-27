@@ -167,4 +167,21 @@ fn diff_hello_smoke_elf() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../guests/common/hello.elf");
     let bytes = std::fs::read(path).expect("read hello.elf");
     assert_diff_elf(&bytes, OptConfig::o0());
+    assert_diff_elf(&bytes, OptConfig::o2());
+
+    let elf = LoadedElf::parse(&bytes).expect("parse elf");
+    let cfg = discover_cfg(&elf).expect("cfg");
+    let w0 = compile_to_wasm(&lift_program(&cfg, &OptConfig::o0()), &elf).unwrap();
+    let w2 = compile_to_wasm(&lift_program(&cfg, &OptConfig::o2()), &elf).unwrap();
+    assert!(
+        w2.wasm_bytes.len() < w0.wasm_bytes.len(),
+        "expected -O2 ({}) < -O0 ({})",
+        w2.wasm_bytes.len(),
+        w0.wasm_bytes.len()
+    );
+}
+
+#[test]
+fn diff_rv32im_o2_all() {
+    diff_rv32im_alu_and_mul_div_edge_cases();
 }
