@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main, testing-main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Run Rust workspace tests (compliance, differential, fuzz)
+        run: cargo test --workspace
+
+      - name: Install wasm-bindgen-cli 0.2.130
+        run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
+
+      - name: Build rv-web-bridge and web frontend
+        run: |
+          cd web && npm ci && cd ..
+          ./scripts/build-web.sh
