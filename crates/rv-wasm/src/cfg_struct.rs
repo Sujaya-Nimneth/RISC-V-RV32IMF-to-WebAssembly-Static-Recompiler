@@ -39,10 +39,11 @@ pub fn recover_structured_cfg(func: &IrFunction) -> StructuredCfg {
         };
     }
 
-    // 1. Compute reachable blocks in RPO starting from bb0.
+    // 1. Compute reachable blocks in RPO starting from function entry block.
+    let entry_bb = func.pc_to_block.get(&func.entry).copied().unwrap_or(BlockId(0));
     let mut visited = vec![false; n];
     let mut postorder = Vec::with_capacity(n);
-    dfs_postorder(func, BlockId(0), &mut visited, &mut postorder);
+    dfs_postorder(func, entry_bb, &mut visited, &mut postorder);
     postorder.reverse();
     let rpo = postorder;
 
@@ -158,9 +159,69 @@ pub fn recover_structured_cfg(func: &IrFunction) -> StructuredCfg {
         }
     }
 
-    // 5. Build Stackifier tree.
+    // 5. Build Stackifier tree and statically verify all branch targets are reachable.
     let nodes = build_stackified_tree(func, &order, &pos, &loop_ranges);
+    if !validate_stackified(func, &nodes) {
+        return StructuredCfg::Dispatcher { blocks: order };
+    }
     StructuredCfg::Stackified { order, nodes }
+}
+
+fn validate_stackified(func: &IrFunction, nodes: &[StructuredNode]) -> bool {
+    let mut labels: Vec<(BlockId, bool)> = Vec::new();
+    validate_nodes(func, nodes, None, &mut labels)
+}
+
+fn validate_nodes(
+    func: &IrFunction,
+    nodes: &[StructuredNode],
+    fallthrough_after: Option<BlockId>,
+    labels: &mut Vec<(BlockId, bool)>,
+) -> bool {
+    for (idx, node) in nodes.iter().enumerate() {
+        let next_ft = if idx + 1 < nodes.len() {
+            first_block_of(&nodes[idx + 1])
+        } else {
+            fallthrough_after
+        };
+        match node {
+            StructuredNode::Block { target_bb, body } => {
+                labels.push((*target_bb, false));
+                let ok = validate_nodes(func, body, Some(*target_bb), labels);
+                labels.pop();
+                if !ok {
+                    return false;
+                }
+            }
+            StructuredNode::Loop { header_bb, body } => {
+                labels.push((*header_bb, true));
+                let ok = validate_nodes(func, body, next_ft, labels);
+                labels.pop();
+                if !ok {
+                    return false;
+                }
+            }
+            StructuredNode::BasicBlock(bb) => {
+                for succ in func.blocks[bb.0 as usize].term.successors() {
+                    let is_ft = next_ft == Some(succ);
+                    let on_stack = labels.iter().any(|(target, _)| *target == succ);
+                    if !is_ft && !on_stack {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+fn first_block_of(node: &StructuredNode) -> Option<BlockId> {
+    match node {
+        StructuredNode::BasicBlock(bb) => Some(*bb),
+        StructuredNode::Block { body, .. } | StructuredNode::Loop { body, .. } => {
+            body.first().and_then(first_block_of)
+        }
+    }
 }
 
 fn dfs_postorder(func: &IrFunction, bb: BlockId, visited: &mut [bool], postorder: &mut Vec<BlockId>) {
