@@ -31,7 +31,10 @@ pub fn run(func: &mut IrFunction) {
             }
 
             match &mut inst.op {
-                IrOp::Load { addr, offset, .. } | IrOp::Store { addr, offset, .. } => {
+                IrOp::Load { addr, offset, .. }
+                | IrOp::Store { addr, offset, .. }
+                | IrOp::LoadF32 { addr, offset }
+                | IrOp::StoreF32 { addr, offset, .. } => {
                     if let Some(&(base, imm)) = adds.get(addr) {
                         if imm >= 0 {
                             let combined = (*offset as i64) + (imm as i64);

@@ -3,6 +3,7 @@
 pub mod cfg_struct;
 pub mod codegen;
 pub mod dispatch;
+pub mod fp_helpers;
 pub mod local_alloc;
 #[cfg(feature = "native-runtime")]
 pub mod runtime;

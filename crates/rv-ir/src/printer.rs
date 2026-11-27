@@ -67,6 +67,27 @@ pub fn print_function(func: &IrFunction) -> String {
                 } => {
                     let _ = write!(out, "store.{width:?} [v{} + {offset}], v{}", addr.0, val.0);
                 }
+                IrOp::FBinOp { op, lhs, rhs } => {
+                    let _ = write!(out, "{op:?} v{}, v{}", lhs.0, rhs.0);
+                }
+                IrOp::FUnaryOp { op, src } => {
+                    let _ = write!(out, "{op:?} v{}", src.0);
+                }
+                IrOp::FMulAdd { op, a, b, c } => {
+                    let _ = write!(out, "{op:?} v{}, v{}, v{}", a.0, b.0, c.0);
+                }
+                IrOp::FCmp { op, lhs, rhs } => {
+                    let _ = write!(out, "fcmp.{op:?} v{}, v{}", lhs.0, rhs.0);
+                }
+                IrOp::LoadF32 { addr, offset } => {
+                    let _ = write!(out, "load.F32 [v{} + {offset}]", addr.0);
+                }
+                IrOp::StoreF32 { addr, val, offset } => {
+                    let _ = write!(out, "store.F32 [v{} + {offset}], v{}", addr.0, val.0);
+                }
+                IrOp::CsrOp { kind, csr, val, .. } => {
+                    let _ = write!(out, "{kind:?} 0x{csr:03x}, v{}", val.0);
+                }
                 IrOp::Ecall => out.push_str("ecall"),
                 IrOp::AddInstret(n) => {
                     let _ = write!(out, "instret += {n}");

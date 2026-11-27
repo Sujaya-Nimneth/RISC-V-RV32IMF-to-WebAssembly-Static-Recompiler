@@ -3,7 +3,8 @@ use crate::dispatch::DispatchTable;
 use rv_abi::{LINEAR_MEM_PAGES, STACK_TOP};
 use rv_decode::{FReg, LoadedElf, Reg};
 use rv_ir::{
-    BinOp, BlockId, CmpOp, IrBlock, IrFunction, IrModule, IrOp, IrTerm, IrType, MemWidth, ValueId,
+    BinOp, BlockId, CmpOp, CsrKind, FBinOp, FCmpOp, FMulAddOp, FUnaryOp, IrBlock, IrFunction,
+    IrModule, IrOp, IrTerm, IrType, MemWidth, ValueId,
 };
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -56,7 +57,6 @@ pub fn validate_wasm(bytes: &[u8]) -> Result<(), String> {
 const G_X_BASE: u32 = 0; // 0..31 -> x1..x31
 const G_F_BASE: u32 = 31; // 31..63 -> f0..f31
 const G_PC: u32 = 63;
-#[allow(dead_code)]
 const G_FCSR: u32 = 64;
 const G_INSTRET: u32 = 65;
 const G_INITIAL_BRK: u32 = 66;
@@ -70,6 +70,10 @@ const TY_RESOLVE: u32 = 4;
 const TY_START: u32 = 5;
 const TY_GET_REG: u32 = 6;
 const TY_GET_INSTRET: u32 = 7;
+const TY_F1: u32 = 8;   // (f32) -> f32
+const TY_F2: u32 = 9;   // (f32, f32) -> f32
+const TY_F3: u32 = 10;  // (f32, f32, f32) -> f32
+const TY_FI: u32 = 11;  // (f32) -> i32
 
 // Fixed function indices
 const FN_IMP_ECALL: u32 = 0;
@@ -80,7 +84,14 @@ const FN_REM_S: u32 = 4;
 const FN_REM_U: u32 = 5;
 const FN_RESOLVE_PC: u32 = 6;
 const FN_TRAP_STUB: u32 = 7;
-const FN_GUEST_BASE: u32 = 8;
+const FN_CANON_F32: u32 = 8;
+const FN_FMIN_S: u32 = 9;
+const FN_FMAX_S: u32 = 10;
+const FN_FCVT_W_S: u32 = 11;
+const FN_FCVT_WU_S: u32 = 12;
+const FN_FCLASS_S: u32 = 13;
+const FN_FMA_S: u32 = 14;
+const FN_GUEST_BASE: u32 = 15;
 
 /// Compile an `IrModule` and `LoadedElf` into a validated standalone WebAssembly module.
 pub fn compile_to_wasm(module: &IrModule, elf: &LoadedElf) -> Result<CompiledWasm, CodegenError> {
@@ -127,6 +138,10 @@ pub fn compile_to_wasm_with_opts(
     types.ty().function([], [ValType::I32]); // 5: _start / get_pc / get_initial_brk
     types.ty().function([ValType::I32], [ValType::I32]); // 6: get_reg / get_freg_bits
     types.ty().function([], [ValType::I64]); // 7: get_instret
+    types.ty().function([ValType::F32], [ValType::F32]); // 8: canon_f32
+    types.ty().function([ValType::F32, ValType::F32], [ValType::F32]); // 9: fmin/fmax
+    types.ty().function([ValType::F32, ValType::F32, ValType::F32], [ValType::F32]); // 10: fma
+    types.ty().function([ValType::F32], [ValType::I32]); // 11: fcvt_w/wu/fclass
     wasm.section(&types);
 
     // 2. Imports
@@ -143,6 +158,13 @@ pub fn compile_to_wasm_with_opts(
     funcs.function(TY_DIV); // FN_REM_U
     funcs.function(TY_RESOLVE); // FN_RESOLVE_PC
     funcs.function(TY_GUEST_FN); // FN_TRAP_STUB
+    funcs.function(TY_F1); // FN_CANON_F32
+    funcs.function(TY_F2); // FN_FMIN_S
+    funcs.function(TY_F2); // FN_FMAX_S
+    funcs.function(TY_FI); // FN_FCVT_W_S
+    funcs.function(TY_FI); // FN_FCVT_WU_S
+    funcs.function(TY_FI); // FN_FCLASS_S
+    funcs.function(TY_F3); // FN_FMA_S
     for _ in 0..num_guest {
         funcs.function(TY_GUEST_FN);
     }
@@ -263,6 +285,13 @@ pub fn compile_to_wasm_with_opts(
     code.function(&emit_rem_u());
     code.function(&emit_resolve_pc(&dispatch));
     code.function(&emit_trap_stub());
+    code.function(&crate::fp_helpers::emit_canon_f32());
+    code.function(&crate::fp_helpers::emit_fmin_s());
+    code.function(&crate::fp_helpers::emit_fmax_s());
+    code.function(&crate::fp_helpers::emit_fcvt_w_s());
+    code.function(&crate::fp_helpers::emit_fcvt_wu_s());
+    code.function(&crate::fp_helpers::emit_fclass_s());
+    code.function(&crate::fp_helpers::emit_fma_s(FN_CANON_F32));
 
     for &pc in &guest_pcs {
         let ir_fn = &module.functions[&pc];
@@ -773,6 +802,52 @@ fn emit_basic_block(
                     MemWidth::B4 => f.instruction(&WInst::I32Store(memarg)),
                 };
             }
+            IrOp::FBinOp { op, lhs, rhs } => {
+                emit_fbinop(f, ctx, *op, *lhs, *rhs);
+                f.instruction(&WInst::LocalSet(ctx.val_local(inst.dst.unwrap())));
+            }
+            IrOp::FUnaryOp { op, src } => {
+                emit_funaryop(f, ctx, *op, *src);
+                f.instruction(&WInst::LocalSet(ctx.val_local(inst.dst.unwrap())));
+            }
+            IrOp::FMulAdd { op, a, b, c } => {
+                emit_fmuladd(f, ctx, *op, *a, *b, *c);
+                f.instruction(&WInst::LocalSet(ctx.val_local(inst.dst.unwrap())));
+            }
+            IrOp::FCmp { op, lhs, rhs } => {
+                f.instruction(&WInst::LocalGet(ctx.val_local(*lhs)));
+                f.instruction(&WInst::LocalGet(ctx.val_local(*rhs)));
+                match op {
+                    FCmpOp::Feq => f.instruction(&WInst::F32Eq),
+                    FCmpOp::Flt => f.instruction(&WInst::F32Lt),
+                    FCmpOp::Fle => f.instruction(&WInst::F32Le),
+                };
+                f.instruction(&WInst::LocalSet(ctx.val_local(inst.dst.unwrap())));
+            }
+            IrOp::LoadF32 { addr, offset } => {
+                f.instruction(&WInst::LocalGet(ctx.val_local(*addr)));
+                f.instruction(&WInst::F32Load(MemArg {
+                    offset: (*offset as u32) as u64,
+                    align: 0,
+                    target: MemArgTarget::Memory(0),
+                    ordering: None,
+                }));
+                f.instruction(&WInst::LocalSet(ctx.val_local(inst.dst.unwrap())));
+            }
+            IrOp::StoreF32 { addr, val, offset } => {
+                f.instruction(&WInst::LocalGet(ctx.val_local(*addr)));
+                f.instruction(&WInst::LocalGet(ctx.val_local(*val)));
+                f.instruction(&WInst::F32Store(MemArg {
+                    offset: (*offset as u32) as u64,
+                    align: 0,
+                    target: MemArgTarget::Memory(0),
+                    ordering: None,
+                }));
+            }
+            IrOp::CsrOp { kind, csr, val, write } => {
+                let dst_loc = ctx.val_local(inst.dst.unwrap());
+                emit_csr_op(f, ctx, *kind, *csr, *val, *write, dst_loc);
+            }
             IrOp::Ecall => {
                 f.instruction(&WInst::GlobalGet(reg_global(Reg::A7)));
                 f.instruction(&WInst::GlobalGet(reg_global(Reg::A0)));
@@ -1081,4 +1156,224 @@ fn emit_cmp(f: &mut Function, ctx: &EmitCtx<'_>, op: CmpOp, lhs: ValueId, rhs: V
         CmpOp::LtU => f.instruction(&WInst::I32LtU),
         CmpOp::GeU => f.instruction(&WInst::I32GeU),
     };
+}
+
+fn emit_fbinop(f: &mut Function, ctx: &EmitCtx<'_>, op: FBinOp, lhs: ValueId, rhs: ValueId) {
+    let l = ctx.val_local(lhs);
+    let r = ctx.val_local(rhs);
+    match op {
+        FBinOp::Fadd => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::F32Add);
+            f.instruction(&WInst::Call(FN_CANON_F32));
+        }
+        FBinOp::Fsub => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::F32Sub);
+            f.instruction(&WInst::Call(FN_CANON_F32));
+        }
+        FBinOp::Fmul => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::F32Mul);
+            f.instruction(&WInst::Call(FN_CANON_F32));
+        }
+        FBinOp::Fdiv => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::F32Div);
+            f.instruction(&WInst::Call(FN_CANON_F32));
+        }
+        FBinOp::Fmin => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::Call(FN_FMIN_S));
+        }
+        FBinOp::Fmax => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::Call(FN_FMAX_S));
+        }
+        FBinOp::Fsgnj => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::I32ReinterpretF32);
+            f.instruction(&WInst::I32Const(0x7FFF_FFFF));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::I32ReinterpretF32);
+            f.instruction(&WInst::I32Const(i32::MIN));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::I32Or);
+            f.instruction(&WInst::F32ReinterpretI32);
+        }
+        FBinOp::Fsgnjn => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::I32ReinterpretF32);
+            f.instruction(&WInst::I32Const(0x7FFF_FFFF));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::I32ReinterpretF32);
+            f.instruction(&WInst::I32Const(i32::MIN));
+            f.instruction(&WInst::I32Xor);
+            f.instruction(&WInst::I32Const(i32::MIN));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::I32Or);
+            f.instruction(&WInst::F32ReinterpretI32);
+        }
+        FBinOp::Fsgnjx => {
+            f.instruction(&WInst::LocalGet(l));
+            f.instruction(&WInst::I32ReinterpretF32);
+            f.instruction(&WInst::LocalGet(r));
+            f.instruction(&WInst::I32ReinterpretF32);
+            f.instruction(&WInst::I32Const(i32::MIN));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::I32Xor);
+            f.instruction(&WInst::F32ReinterpretI32);
+        }
+    }
+}
+
+fn emit_funaryop(f: &mut Function, ctx: &EmitCtx<'_>, op: FUnaryOp, src: ValueId) {
+    let s = ctx.val_local(src);
+    f.instruction(&WInst::LocalGet(s));
+    match op {
+        FUnaryOp::Fsqrt => {
+            f.instruction(&WInst::F32Sqrt);
+            f.instruction(&WInst::Call(FN_CANON_F32));
+        }
+        FUnaryOp::FcvtWS => {
+            f.instruction(&WInst::Call(FN_FCVT_W_S));
+        }
+        FUnaryOp::FcvtWuS => {
+            f.instruction(&WInst::Call(FN_FCVT_WU_S));
+        }
+        FUnaryOp::FcvtSW => {
+            f.instruction(&WInst::F32ConvertI32S);
+        }
+        FUnaryOp::FcvtSWu => {
+            f.instruction(&WInst::F32ConvertI32U);
+        }
+        FUnaryOp::FmvXW => {
+            f.instruction(&WInst::I32ReinterpretF32);
+        }
+        FUnaryOp::FmvWX => {
+            f.instruction(&WInst::F32ReinterpretI32);
+        }
+        FUnaryOp::Fclass => {
+            f.instruction(&WInst::Call(FN_FCLASS_S));
+        }
+    }
+}
+
+fn emit_fmuladd(
+    f: &mut Function,
+    ctx: &EmitCtx<'_>,
+    op: FMulAddOp,
+    a: ValueId,
+    b: ValueId,
+    c: ValueId,
+) {
+    f.instruction(&WInst::LocalGet(ctx.val_local(a)));
+    if matches!(op, FMulAddOp::Fnmsub | FMulAddOp::Fnmadd) {
+        f.instruction(&WInst::F32Neg);
+    }
+    f.instruction(&WInst::LocalGet(ctx.val_local(b)));
+    f.instruction(&WInst::LocalGet(ctx.val_local(c)));
+    if matches!(op, FMulAddOp::Fmsub | FMulAddOp::Fnmadd) {
+        f.instruction(&WInst::F32Neg);
+    }
+    f.instruction(&WInst::Call(FN_FMA_S));
+}
+
+fn emit_csr_op(
+    f: &mut Function,
+    ctx: &EmitCtx<'_>,
+    kind: CsrKind,
+    csr: u16,
+    val: ValueId,
+    write: bool,
+    dst_loc: u32,
+) {
+    // Read old value and store into dst_loc.
+    match csr {
+        0x001 => {
+            f.instruction(&WInst::GlobalGet(G_FCSR));
+            f.instruction(&WInst::I32Const(0x1F));
+            f.instruction(&WInst::I32And);
+        }
+        0x002 => {
+            f.instruction(&WInst::GlobalGet(G_FCSR));
+            f.instruction(&WInst::I32Const(5));
+            f.instruction(&WInst::I32ShrU);
+            f.instruction(&WInst::I32Const(0x7));
+            f.instruction(&WInst::I32And);
+        }
+        0x003 => {
+            f.instruction(&WInst::GlobalGet(G_FCSR));
+            f.instruction(&WInst::I32Const(0xFF));
+            f.instruction(&WInst::I32And);
+        }
+        _ => {
+            f.instruction(&WInst::I32Const(0));
+            f.instruction(&WInst::LocalSet(dst_loc));
+            return;
+        }
+    }
+    f.instruction(&WInst::LocalSet(dst_loc));
+
+    if !write {
+        return;
+    }
+
+    // Compute new field value in stack from old (dst_loc) and val.
+    match kind {
+        CsrKind::Csrrw => {
+            f.instruction(&WInst::LocalGet(ctx.val_local(val)));
+        }
+        CsrKind::Csrrs => {
+            f.instruction(&WInst::LocalGet(dst_loc));
+            f.instruction(&WInst::LocalGet(ctx.val_local(val)));
+            f.instruction(&WInst::I32Or);
+        }
+        CsrKind::Csrrc => {
+            f.instruction(&WInst::LocalGet(dst_loc));
+            f.instruction(&WInst::LocalGet(ctx.val_local(val)));
+            f.instruction(&WInst::I32Const(-1));
+            f.instruction(&WInst::I32Xor);
+            f.instruction(&WInst::I32And);
+        }
+    }
+
+    match csr {
+        0x001 => {
+            f.instruction(&WInst::I32Const(0x1F));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::GlobalGet(G_FCSR));
+            f.instruction(&WInst::I32Const(!0x1F));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::I32Or);
+            f.instruction(&WInst::GlobalSet(G_FCSR));
+        }
+        0x002 => {
+            f.instruction(&WInst::I32Const(0x7));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::I32Const(5));
+            f.instruction(&WInst::I32Shl);
+            f.instruction(&WInst::GlobalGet(G_FCSR));
+            f.instruction(&WInst::I32Const(!(0x7 << 5)));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::I32Or);
+            f.instruction(&WInst::GlobalSet(G_FCSR));
+        }
+        0x003 => {
+            f.instruction(&WInst::I32Const(0xFF));
+            f.instruction(&WInst::I32And);
+            f.instruction(&WInst::GlobalSet(G_FCSR));
+        }
+        _ => {
+            f.instruction(&WInst::Drop);
+        }
+    }
 }
