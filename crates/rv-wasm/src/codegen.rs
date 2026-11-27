@@ -876,13 +876,24 @@ fn emit_basic_block(
             then_bb,
             else_bb,
         } => {
-            f.instruction(&WInst::LocalGet(ctx.val_local(*cond)));
-            f.instruction(&WInst::If(BlockType::Empty));
-            ctx.label_stack.push((BlockId(u32::MAX), false));
-            emit_branch_to(f, ctx, bb.id, *then_bb, None);
-            ctx.label_stack.pop();
-            f.instruction(&WInst::End);
-            emit_branch_to(f, ctx, bb.id, *else_bb, fallthrough);
+            if fallthrough == Some(*then_bb) && fallthrough != Some(*else_bb) {
+                f.instruction(&WInst::LocalGet(ctx.val_local(*cond)));
+                f.instruction(&WInst::I32Eqz);
+                f.instruction(&WInst::If(BlockType::Empty));
+                ctx.label_stack.push((BlockId(u32::MAX), false));
+                emit_branch_to(f, ctx, bb.id, *else_bb, None);
+                ctx.label_stack.pop();
+                f.instruction(&WInst::End);
+                emit_branch_to(f, ctx, bb.id, *then_bb, fallthrough);
+            } else {
+                f.instruction(&WInst::LocalGet(ctx.val_local(*cond)));
+                f.instruction(&WInst::If(BlockType::Empty));
+                ctx.label_stack.push((BlockId(u32::MAX), false));
+                emit_branch_to(f, ctx, bb.id, *then_bb, None);
+                ctx.label_stack.pop();
+                f.instruction(&WInst::End);
+                emit_branch_to(f, ctx, bb.id, *else_bb, fallthrough);
+            }
         }
         IrTerm::BrIfCmp {
             op,
@@ -891,13 +902,24 @@ fn emit_basic_block(
             then_bb,
             else_bb,
         } => {
-            emit_cmp(f, ctx, *op, *lhs, *rhs);
-            f.instruction(&WInst::If(BlockType::Empty));
-            ctx.label_stack.push((BlockId(u32::MAX), false));
-            emit_branch_to(f, ctx, bb.id, *then_bb, None);
-            ctx.label_stack.pop();
-            f.instruction(&WInst::End);
-            emit_branch_to(f, ctx, bb.id, *else_bb, fallthrough);
+            if fallthrough == Some(*then_bb) && fallthrough != Some(*else_bb) {
+                emit_cmp(f, ctx, *op, *lhs, *rhs);
+                f.instruction(&WInst::I32Eqz);
+                f.instruction(&WInst::If(BlockType::Empty));
+                ctx.label_stack.push((BlockId(u32::MAX), false));
+                emit_branch_to(f, ctx, bb.id, *else_bb, None);
+                ctx.label_stack.pop();
+                f.instruction(&WInst::End);
+                emit_branch_to(f, ctx, bb.id, *then_bb, fallthrough);
+            } else {
+                emit_cmp(f, ctx, *op, *lhs, *rhs);
+                f.instruction(&WInst::If(BlockType::Empty));
+                ctx.label_stack.push((BlockId(u32::MAX), false));
+                emit_branch_to(f, ctx, bb.id, *then_bb, None);
+                ctx.label_stack.pop();
+                f.instruction(&WInst::End);
+                emit_branch_to(f, ctx, bb.id, *else_bb, fallthrough);
+            }
         }
         IrTerm::Call {
             target_pc,
