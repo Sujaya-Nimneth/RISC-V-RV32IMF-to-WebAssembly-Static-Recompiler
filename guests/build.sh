@@ -52,4 +52,10 @@ if [[ "${1:-}" == "--smoke" ]]; then
   exit 0
 fi
 
-compile_c "rv32im" "ilp32" "$ROOT_DIR/guests/common/hello.elf" "$ROOT_DIR/guests/common/hello.c"
+compile_c "rv32im"  "ilp32"  "$ROOT_DIR/guests/common/hello.elf"       "$ROOT_DIR/guests/common/hello.c"
+compile_c "rv32imf" "ilp32f" "$OUT_DIR/compliance.elf"                 "$ROOT_DIR/guests/compliance/main.c"
+compile_c "rv32imf" "ilp32f" "$OUT_DIR/mandelbrot.elf"                 "$ROOT_DIR/guests/benchmarks/mandelbrot.c"
+compile_c "rv32imf" "ilp32f" "$OUT_DIR/matmul.elf"                     "$ROOT_DIR/guests/benchmarks/matmul.c"
+compile_c "rv32im"  "ilp32"  "$OUT_DIR/dhrystone.elf"                  "$ROOT_DIR/guests/benchmarks/dhrystone.c"
+compile_c "rv32imf" "ilp32f" "$OUT_DIR/raycaster.elf"                  "$ROOT_DIR/guests/raycaster/main.c"
+compile_c "rv32im"  "ilp32"  "$OUT_DIR/life.elf"                       "$ROOT_DIR/guests/life/main.c"

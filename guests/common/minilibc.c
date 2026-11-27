@@ -139,6 +139,7 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap) {
             continue;
         }
         fmt++;
+        while (*fmt == '-' || (*fmt >= '0' && *fmt <= '9')) fmt++;
         if (*fmt == 'l') fmt++;
         switch (*fmt) {
             case '%':
