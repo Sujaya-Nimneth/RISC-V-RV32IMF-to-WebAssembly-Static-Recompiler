@@ -178,7 +178,7 @@ fn discover_function_blocks(
     let mut decoded: BTreeMap<u32, DecodedInst> = BTreeMap::new();
     let mut new_calls: Vec<u32> = Vec::new();
     // Track simple LUI/AUIPC + ADDI code address materializations for fn pointers.
-    let mut upper_imm: [Option<u32>; 32] = [None; 32];
+    let mut upper_imm: [Option<u32>; 32];
 
     leaders.insert(fn_entry);
     worklist.push_back(fn_entry);
