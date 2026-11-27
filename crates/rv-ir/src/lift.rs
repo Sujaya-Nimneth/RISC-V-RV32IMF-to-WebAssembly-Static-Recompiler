@@ -11,11 +11,13 @@ pub fn lift_program(cfg: &ProgramCfg, opt: &OptConfig) -> IrModule {
     for (&entry, fcfg) in &cfg.functions {
         functions.insert(entry, lift_function(fcfg, opt));
     }
-    IrModule {
+    let mut module = IrModule {
         entry: cfg.entry,
         functions,
         indirect_targets: cfg.indirect_targets.clone(),
-    }
+    };
+    crate::opt::optimize_module(&mut module, opt);
+    module
 }
 
 fn lift_function(fcfg: &FunctionCfg, opt: &OptConfig) -> IrFunction {

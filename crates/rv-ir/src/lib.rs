@@ -2,6 +2,7 @@
 
 pub mod ir;
 pub mod lift;
+pub mod opt;
 pub mod printer;
 
 pub use ir::{
@@ -9,4 +10,5 @@ pub use ir::{
     OptConfig, Phi, ValueId,
 };
 pub use lift::lift_program;
+pub use opt::{optimize_function, optimize_module};
 pub use printer::print_function;
